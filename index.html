@@ -387,14 +387,14 @@ header { padding: 8px 0 16px; }
 .download-controls .theme-toggle { margin-left: auto; align-self: end; }
 .theme-toggle svg { display: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .theme-toggle[data-theme-mode="dark"] .theme-icon-dark, .theme-toggle[data-theme-mode="light"] .theme-icon-light, .theme-toggle[data-theme-mode="system"] .theme-icon-system { display: block; }
-.btn:is(.download-html, .save-recovery-sheet) {
+.btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat) {
   border-color: color-mix(in oklab, var(--ok) 65%, var(--border));
   background: color-mix(in oklab, var(--ok) 14%, var(--surface)); color: var(--ok);
 }
-.btn:is(.download-html, .save-recovery-sheet):hover {
+.btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat):hover {
   background: color-mix(in oklab, var(--ok) 23%, var(--surface)); color: var(--fg);
 }
-.btn:is(.download-html, .save-recovery-sheet):focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+.btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat):focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
 .download-controls .github-repo-link { display: inline-flex; align-items: center; gap: 8px; }
 .github-mark { flex: 0 0 auto; }
 .download-controls .github-repo-link {
@@ -3635,10 +3635,15 @@ function hodlPrivateDataControls(descriptionId,scope="wallet"){
       <span>Show private recovery material <span class="reveal-private-toggle-note">(air-gap only)</span></span>
     </label>
     <button class="btn secondary save-recovery-sheet" id="save" type="button" aria-describedby="recovery-sheet-disclosure">${downloadLabel}</button>
+    ${hodlWalletDatControl(privateSheet)}
     <p class="recovery-download-disclosure" id="recovery-sheet-disclosure"><strong>${privateSheet?"Private export:":"Watch-only export:"}</strong> ${disclosure}</p>
   </div>`
 }
-function hodlSaveRecoveryControl(){return`<div class="wallet-data-actions no-print"><button class="btn secondary save-recovery-sheet" id="save" type="button">Save watch-only sheet</button></div>`}
+function hodlWalletDatControl(includePrivate){
+  if(!hodlWalletExport.hasDescriptors(re))return"";
+  return`<button class="btn secondary save-wallet-dat" id="download-wallet-dat" type="button" aria-describedby="recovery-sheet-disclosure">${hodlWalletExport.walletDatButtonLabel(includePrivate)}</button>`
+}
+function hodlSaveRecoveryControl(){return`<div class="wallet-data-actions no-print"><button class="btn secondary save-recovery-sheet" id="save" type="button">Save watch-only sheet</button>${hodlWalletDatControl(!1)}</div>`}
 function hodlWalletMessages(wallet,idPrefix){
   let warnings=[...(wallet.warnings||[])].filter(message=>!wallet.passphraseUsed||!/\bpassphrase\b/i.test(message)),notes=[...(wallet.notes||[])];
   if(wallet.passphraseUsed)warnings.unshift("A BIP39 passphrase is in use. It creates a different wallet, is not printed in the recovery sheet, and must be preserved separately to recover this wallet.");
@@ -3744,11 +3749,32 @@ function hodlDownloadRecoverySheet(){
   link.href=url;link.download="bitcoin-recovery-sheet.txt";link.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
+function hodlWalletDatDeps(){
+  return{
+    sha256:bytes=>tr(bytes),
+    checksum:Cs,
+    base58Decode:text=>sr.decode(text),
+    deriveBranchBody:(xpubText,branch)=>{
+      let node=Gt.fromExtendedKey(le(xpubText,cr.mainnet.x.pub)).deriveChild(branch),body=new Uint8Array(74),view=new DataView(body.buffer);
+      body[0]=node.depth;view.setUint32(1,node.parentFingerprint>>>0,!1);view.setUint32(5,node.index>>>0,!1);
+      body.set(node.chainCode,9);body.set(node.publicKey,41);return body
+    },
+    publicKeyForPrivate:secret=>xe.getPublicKey(secret,!0)
+  }
+}
+function hodlDownloadWalletDat(){
+  if(!re||!hodlWalletExport.hasDescriptors(re))return;
+  let bytes=hodlWalletExport.buildWalletDat(re,Ge,hodlWalletDatDeps()),blob=new Blob([bytes],{type:"application/octet-stream"}),url=URL.createObjectURL(blob),link=document.createElement("a");
+  link.href=url;link.download=hodlWalletExport.walletDatFilename(Ge);link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000)
+}
 function hodlBindWalletResultActions(){
   let reveal=document.getElementById("reveal");
   if(reveal)reveal.onchange=()=>{Ge=reveal.checked;tc();requestAnimationFrame(()=>document.getElementById("reveal")?.focus({preventScroll:true}))};
   let save=document.getElementById("save");
   if(save){let clean=save.cloneNode(!0);save.replaceWith(clean);clean.addEventListener("click",hodlDownloadRecoverySheet)}
+  let walletDat=document.getElementById("download-wallet-dat");
+  if(walletDat){let clean=walletDat.cloneNode(!0);walletDat.replaceWith(clean);clean.addEventListener("click",hodlDownloadWalletDat)}
 }
 function hodlFocusWalletResult(){
   requestAnimationFrame(()=>dr.querySelector(".wallet-data-intro h2, .account-result-card > h2")?.focus({preventScroll:!1}))
@@ -5800,6 +5826,587 @@ function hodlInitSecretFieldAutoClear(){
   addEventListener("pageshow",event=>{if(event.persisted)clearSecretFields()})
 }
 hodlInitWorkspace();hodlSeedInitialManagers();hodlInitKeyManager();hodlInitMsigManager();hodlInitClearActionState();hodlInitSecretFieldAutoClear();hodlInitTheme();hodlInitMasterFingerprintPreview();hodlInitDerivationControls();hodlInitSegmentedControls();})();
+</script>
+<script>
+// Minimal SQLite 3 database file writer ("emulator").
+//
+// Produces a complete, standards-compliant SQLite database file in memory —
+// the format Bitcoin Core uses for descriptor wallet wallet.dat files. It
+// supports exactly what such files need and nothing more:
+//
+//   - 4096-byte pages, UTF-8, rollback-journal mode (write/read version 1).
+//   - Tables whose rows are given as JS values (null, integer, TEXT, BLOB).
+//   - An automatic index for a BLOB PRIMARY KEY, like SQLite creates for
+//     CREATE TABLE main(key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL).
+//   - Multi-page table and index b-trees (leaf pages plus one interior
+//     level), with cells laid out exactly the way sqlite3 expects.
+//
+// Deliberate limits (all far beyond wallet record sizes): records never
+// overflow to overflow pages (a single cell payload must fit a page), and a
+// single interior level must be enough. Violating either throws instead of
+// writing a corrupt file. The writer performs no I/O and no network traffic.
+var hodlSqliteWriter = (() => {
+  const PAGE_SIZE = 4096;
+  const SQLITE_VERSION_NUMBER = 3038005; // matches the SQLite bundled with Bitcoin Core 28.x
+
+  // --- byte helpers -------------------------------------------------------
+
+  const utf8 = (text) => new TextEncoder().encode(text);
+
+  const concat = (...parts) => {
+    let total = 0;
+    for (const part of parts) total += part.length;
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) { out.set(part, offset); offset += part.length; }
+    return out;
+  };
+
+  const u32be = (value) => {
+    const bytes = new Uint8Array(4);
+    new DataView(bytes.buffer).setUint32(0, value >>> 0, false);
+    return bytes;
+  };
+
+  const u16be = (value) => Uint8Array.of((value >>> 8) & 0xff, value & 0xff);
+
+  // SQLite 64-bit varint: up to eight 7-bit groups with the high bit marking
+  // continuation; a ninth byte carries the final 8 bits when needed.
+  const varint = (value) => {
+    let v = BigInt(value);
+    if (v < 0n) v = BigInt.asUintN(64, v);
+    if (v > 0xffffffffffffffffn) throw new Error("sqlite varint out of range");
+    if (v <= 0x7fn) return Uint8Array.of(Number(v));
+    if (v > 0xffffffffffffffn) {
+      const bytes = new Uint8Array(9);
+      bytes[8] = Number(v & 0xffn);
+      v >>= 8n;
+      for (let i = 7; i >= 0; i--) { bytes[i] = Number(v & 0x7fn) | 0x80; v >>= 7n; }
+      return bytes;
+    }
+    const chunks = [];
+    while (v > 0x7fn) { chunks.unshift(Number(v & 0x7fn)); v >>= 7n; }
+    chunks.unshift(Number(v));
+    return Uint8Array.from(chunks.map((chunk, index) => (index < chunks.length - 1 ? chunk | 0x80 : chunk)));
+  };
+
+  // --- record (row) encoding ----------------------------------------------
+  // Serial types: 0 NULL, 1..4/6 signed ints of 1/2/3/4/8 bytes, 8 = integer
+  // 0, 9 = integer 1, 12+2n BLOB of n bytes, 13+2n TEXT of n bytes.
+
+  const serialColumn = (value) => {
+    if (value === null || value === undefined) return { type: 0n, bytes: new Uint8Array(0) };
+    if (typeof value === "number" || typeof value === "bigint") {
+      const v = BigInt(value);
+      if (v === 0n) return { type: 8n, bytes: new Uint8Array(0) };
+      if (v === 1n) return { type: 9n, bytes: new Uint8Array(0) };
+      for (const [type, bits] of [[1n, 8], [2n, 16], [3n, 24], [4n, 32], [6n, 64]]) {
+        const min = -(1n << BigInt(bits - 1));
+        const max = (1n << BigInt(bits - 1)) - 1n;
+        if (v >= min && v <= max) {
+          const bytes = new Uint8Array(bits / 8);
+          let rest = BigInt.asUintN(bits, v);
+          for (let i = bits / 8 - 1; i >= 0; i--) { bytes[i] = Number(rest & 0xffn); rest >>= 8n; }
+          return { type, bytes };
+        }
+      }
+      throw new Error("sqlite integer out of range");
+    }
+    if (typeof value === "string") {
+      const bytes = utf8(value);
+      return { type: 13n + 2n * BigInt(bytes.length), bytes };
+    }
+    if (value instanceof Uint8Array) return { type: 12n + 2n * BigInt(value.length), bytes: value };
+    throw new Error(`unsupported sqlite column value: ${typeof value}`);
+  };
+
+  const encodeRecord = (values) => {
+    const columns = values.map(serialColumn);
+    let typeBytes = 0;
+    for (const column of columns) typeBytes += varint(column.type).length;
+    // The header starts with a varint of the header length, which includes
+    // that varint itself; grow it until the size is self-consistent.
+    let lengthSize = 1;
+    while (varint(BigInt(typeBytes + lengthSize)).length !== lengthSize) lengthSize++;
+    const header = concat(varint(BigInt(typeBytes + lengthSize)), ...columns.map((column) => varint(column.type)));
+    return concat(header, ...columns.map((column) => column.bytes));
+  };
+
+  // --- b-tree assembly ------------------------------------------------------
+
+  const TABLE_LEAF = 0x0d;
+  const TABLE_INTERIOR = 0x05;
+  const INDEX_LEAF = 0x0a;
+  const INDEX_INTERIOR = 0x02;
+
+  // A cell payload beyond these sizes would need overflow pages, which this
+  // writer intentionally does not support (wallet records are ~500 bytes max).
+  const maxInlinePayload = (index) =>
+    index ? Math.floor(((PAGE_SIZE - 12) * 64) / 255) - 23 : PAGE_SIZE - 35;
+
+  const tableLeafCell = (rowid, record) => concat(varint(record.length), varint(rowid), record);
+  const indexLeafCell = (record) => concat(varint(record.length), record);
+  const tableInteriorCell = (childPage, rowid) => concat(u32be(childPage), varint(rowid));
+  const indexInteriorCell = (childPage, record) => concat(u32be(childPage), varint(record.length), record);
+
+  const bytewiseCompare = (a, b) => {
+    const length = Math.min(a.length, b.length);
+    for (let i = 0; i < length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+    return a.length - b.length;
+  };
+
+  // Packs sorted cells into leaf pages, then (if needed) one interior level.
+  // Table interior cells carry only a rowid bound; index interior cells carry
+  // a full divider record, which SQLite MOVES out of the leaf (an index b-tree
+  // holds every record exactly once across leaf and interior pages).
+  const buildBTree = ({ cells, index }) => {
+    const limit = maxInlinePayload(index);
+    for (const cell of cells) {
+      if (cell.payload.length > limit) {
+        throw new Error(`sqlite cell payload ${cell.payload.length} exceeds inline limit ${limit}`);
+      }
+    }
+    const leafHeader = 8;
+    const leaves = [];
+    let current = [];
+    let used = leafHeader;
+    for (const cell of cells) {
+      const encoded = index ? indexLeafCell(cell.payload) : tableLeafCell(cell.rowid, cell.payload);
+      const need = encoded.length + 2;
+      if (current.length > 0 && used + need > PAGE_SIZE) {
+        leaves.push(current);
+        current = [];
+        used = leafHeader;
+      }
+      current.push({ cell, encoded });
+      used += need;
+    }
+    leaves.push(current);
+    if (leaves.length > 200) throw new Error("sqlite writer: too many leaf pages for one interior level");
+
+    let interior = null;
+    if (leaves.length > 1) {
+      const headerSize = 12;
+      let usedInterior = headerSize;
+      const interiorCells = [];
+      for (let i = 0; i < leaves.length - 1; i++) {
+        let key;
+        if (index) {
+          // The divider record is promoted out of the leaf into the parent.
+          if (leaves[i].length < 2) throw new Error("sqlite writer: index leaf too small to divide");
+          key = { payload: leaves[i].pop().cell.payload };
+          usedInterior += 4 + varint(key.payload.length).length + key.payload.length + 2;
+        } else {
+          key = { rowid: leaves[i][leaves[i].length - 1].cell.rowid };
+          usedInterior += 4 + varint(key.rowid).length + 2;
+        }
+        if (usedInterior > PAGE_SIZE) throw new Error("sqlite writer: interior page overflow");
+        interiorCells.push({ key });
+      }
+      interior = interiorCells;
+    }
+    return { leaves, interior, index };
+  };
+
+  // --- page rendering -------------------------------------------------------
+
+  const renderPage = ({ type, cells, rightmost, firstPage }) => {
+    const page = new Uint8Array(PAGE_SIZE);
+    const start = firstPage ? 100 : 0;
+    const interior = type === TABLE_INTERIOR || type === INDEX_INTERIOR;
+    const headerSize = interior ? 12 : 8;
+    let contentOffset = PAGE_SIZE;
+    const pointers = [];
+    for (const cell of cells) {
+      contentOffset -= cell.encoded.length;
+      page.set(cell.encoded, contentOffset);
+      pointers.push(contentOffset);
+    }
+    page[start] = type;
+    page.set(u16be(0), start + 1); // first freeblock
+    page.set(u16be(cells.length), start + 3);
+    page.set(u16be(contentOffset === PAGE_SIZE ? 0 : contentOffset), start + 5);
+    page[start + 7] = 0; // fragmented free bytes
+    if (interior) page.set(u32be(rightmost), start + 8);
+    let pointerOffset = start + headerSize;
+    for (const pointer of pointers) {
+      page.set(u16be(pointer), pointerOffset);
+      pointerOffset += 2;
+    }
+    return page;
+  };
+
+  const writeHeader = (page, { pageCount, applicationId }) => {
+    page.set(utf8("SQLite format 3\0"), 0);
+    page.set(u16be(PAGE_SIZE), 16);
+    page[18] = 1; // file format write version: rollback journal
+    page[19] = 1; // file format read version
+    page[20] = 0; // reserved space per page
+    page[21] = 64; // max payload fraction
+    page[22] = 32; // min payload fraction
+    page[23] = 32; // leaf payload fraction
+    page.set(u32be(1), 24); // file change counter
+    page.set(u32be(pageCount), 28); // database size in pages
+    page.set(u32be(0), 32); // first freelist trunk page
+    page.set(u32be(0), 36); // freelist page count
+    page.set(u32be(1), 40); // schema cookie
+    page.set(u32be(4), 44); // schema format
+    page.set(u32be(0), 48); // default page cache size
+    page.set(u32be(0), 52); // largest root page (unused without auto-vacuum)
+    page.set(u32be(1), 56); // text encoding: UTF-8
+    page.set(u32be(0), 60); // user version
+    page.set(u32be(0), 64); // incremental vacuum
+    page.set(u32be(applicationId >>> 0), 68); // application id (network magic for Core wallets)
+    // 72..92 reserved, zero
+    page.set(u32be(1), 92); // version-valid-for
+    page.set(u32be(SQLITE_VERSION_NUMBER), 96);
+  };
+
+  // Creates a complete SQLite database file.
+  //
+  // tables: [{
+  //   name: "main",
+  //   sql: "CREATE TABLE ...",            // stored verbatim in sqlite_master
+  //   primaryKey: 0,                      // column index of a BLOB PRIMARY KEY
+  //                                       // (gets a sqlite_autoindex_<name>_1);
+  //                                       // omit for a plain rowid table
+  //   rows: [[col, col, ...], ...],       // values: null | integer | string | Uint8Array
+  // }]
+  const createDatabase = ({ applicationId = 0, tables = [] }) => {
+    if (!tables.length) throw new Error("sqlite writer: no tables");
+    for (const table of tables) {
+      if (!table.rows.length) throw new Error(`sqlite writer: table ${table.name} has no rows`);
+    }
+
+    // Logical b-trees first; page numbers assigned afterwards.
+    const plans = tables.map((table) => {
+      const rows = table.rows.map((columns, index) => ({ rowid: index + 1, columns }));
+      const cells = rows.map(({ rowid, columns }) => ({ rowid, payload: encodeRecord(columns) }));
+      const tree = buildBTree({
+        cells,
+        index: false,
+        leafCellKey: (leaf) => leaf[leaf.length - 1].cell.rowid,
+        interiorCellKey: (leaf) => ({ rowid: leaf[leaf.length - 1].cell.rowid }),
+      });
+      let indexTree = null;
+      if (table.primaryKey !== undefined && table.primaryKey !== null) {
+        const indexCells = rows
+          .map(({ rowid, columns }) => ({ rowid, key: columns[table.primaryKey], payload: encodeRecord([columns[table.primaryKey], rowid]) }))
+          .sort((a, b) => bytewiseCompare(a.key, b.key) || (a.rowid - b.rowid));
+        indexTree = buildBTree({
+          cells: indexCells,
+          index: true,
+          leafCellKey: (leaf) => leaf[leaf.length - 1].cell.payload,
+          interiorCellKey: (leaf) => ({ payload: leaf[leaf.length - 1].cell.payload }),
+        });
+      }
+      return { table, tree, indexTree };
+    });
+
+    // Page 1 is sqlite_master. Then for each table: root page first, then its
+    // leaf pages, then the same for the table's automatic index.
+    const pages = new Map(); // pageNumber -> page descriptor
+    let nextPage = 2;
+    const assign = (tree, interiorType, leafType) => {
+      const rootPage = nextPage++;
+      if (!tree.interior) {
+        pages.set(rootPage, { type: leafType, cells: tree.leaves[0] });
+        return rootPage;
+      }
+      // Root at rootPage, leaves at rootPage+1 .. rootPage+leafCount.
+      const leafPages = tree.leaves.map((leaf, i) => rootPage + 1 + i);
+      const interiorCells = tree.interior.map((cell, i) => ({
+        encoded: tree.index
+          ? indexInteriorCell(leafPages[i], cell.key.payload)
+          : tableInteriorCell(leafPages[i], cell.key.rowid),
+      }));
+      pages.set(rootPage, { type: interiorType, cells: interiorCells, rightmost: leafPages[leafPages.length - 1] });
+      tree.leaves.forEach((leaf, i) => pages.set(leafPages[i], { type: leafType, cells: leaf }));
+      nextPage += tree.leaves.length;
+      return rootPage;
+    };
+
+    const masterRows = [];
+    for (const plan of plans) {
+      const rootPage = assign(plan.tree, TABLE_INTERIOR, TABLE_LEAF);
+      masterRows.push(["table", plan.table.name, plan.table.name, rootPage, plan.table.sql]);
+      if (plan.indexTree) {
+        const indexRoot = assign(plan.indexTree, INDEX_INTERIOR, INDEX_LEAF);
+        masterRows.push(["index", `sqlite_autoindex_${plan.table.name}_1`, plan.table.name, indexRoot, null]);
+      }
+    }
+
+    const masterCells = masterRows.map((columns, index) => ({ rowid: index + 1, encoded: tableLeafCell(index + 1, encodeRecord(columns)) }));
+    pages.set(1, { type: TABLE_LEAF, cells: masterCells, firstPage: true });
+
+    const pageCount = nextPage - 1;
+    const database = new Uint8Array(pageCount * PAGE_SIZE);
+    for (const [number, descriptor] of pages) {
+      database.set(renderPage(descriptor), (number - 1) * PAGE_SIZE);
+    }
+    writeHeader(database.subarray(0, PAGE_SIZE), { pageCount, applicationId });
+    return database;
+  };
+
+  return { createDatabase, encodeRecord, varint, bytewiseCompare, PAGE_SIZE };
+})();
+</script>
+<script>
+// Bitcoin Core wallet.dat export.
+//
+// Builds a complete descriptor-wallet database byte-by-byte in the exact
+// format Bitcoin Core 28.x writes for `createwallet` + `importdescriptors`,
+// using hodlSqliteWriter for the container. While "Show private recovery
+// material" is off, every descriptor is watch-only (xpub) and the wallet is
+// flagged disable-private-keys; while it is on, accounts with spending
+// material additionally get walletdescriptorkey records (the account private
+// key, DER-encoded) so the wallet can sign. The button label and filename
+// always say which variant is being downloaded.
+//
+// Record format verified against Bitcoin Core v28.3.0 on regtest:
+//   version / minversion / flags / bestblock / bestblock_nomerkle
+//   walletdescriptor      <id>  -> public descriptor string, creation time,
+//                                  next_index, range_start, range_end
+//   walletdescriptorcache <id> <pos 0> -> branch xpub (74 bytes, no version)
+//   walletdescriptorkey   <id> <pubkey> -> DER private key + key hash (private only)
+//   activeexternalspk / activeinternalspk <type> -> descriptor id
+//
+// The module is pure byte transformation: no I/O, no network traffic, and no
+// key derivation of its own (crypto is injected by the caller).
+var hodlWalletExport = (() => {
+  const MAIN_SQL = "CREATE TABLE main(key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL)";
+
+  const RECORD_VERSION = 280300; // last client version seen by the reference files
+  const RECORD_MINVERSION = 169900; // FEATURE_PRE_SPLIT_KEYPOOL; every Core with descriptor support accepts it
+  const RANGE_END = 1000; // importdescriptors default active range
+
+  // Wallet flags (walletutil.h): DESCRIPTORS | BLANK, plus DISABLE_PRIVATE_KEYS for watch-only.
+  const FLAG_DISABLE_PRIVATE_KEYS = 1n << 32n;
+  const FLAG_BLANK_WALLET = 1n << 33n;
+  const FLAG_DESCRIPTORS = 1n << 34n;
+
+  const DUMMY_LOCATOR_VERSION = 70016; // CBlockLocator::DUMMY_VERSION, little-endian in records
+
+  const NETWORKS = {
+    mainnet: {
+      applicationId: 0xf9beb4d9, // network magic in natural byte order
+      genesis: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    },
+    testnet: {
+      applicationId: 0x0b110907,
+      genesis: "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943",
+    },
+    // Not offered by the UI; used by the test suite to validate files with a
+    // regtest Bitcoin Core node.
+    regtest: {
+      applicationId: 0xfabfb5da,
+      genesis: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+    },
+  };
+
+  // OutputType (wallet): pkh=0, sh(wpkh)=1, wpkh=2, tr=3.
+  const OUTPUT_TYPES = { bip44: 0, bip49: 1, bip84: 2, bip86: 3 };
+
+  // DER-encoded secp256k1 private key (Bitcoin Core CPrivKey form): static
+  // template, insert the 32-byte secret and the 33-byte compressed pubkey.
+  const DER_PREFIX = hex(
+    "3081d3" + "020101" + "0420",
+  );
+  const DER_PARAMS = hex(
+    "a08185" + "308182" + "020101" +
+    "302c" + "06072a8648ce3d0101" +
+    "022100" + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f" +
+    "3006" + "040100" + "040107" +
+    "0421" + "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" +
+    "022100" + "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141" +
+    "020101",
+  );
+  const DER_PUBKEY_PREFIX = hex("a124" + "0322" + "00");
+
+  function hex(text) {
+    const bytes = new Uint8Array(text.length / 2);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(text.slice(2 * i, 2 * i + 2), 16);
+    return bytes;
+  }
+
+  const concat = (...parts) => {
+    let total = 0;
+    for (const part of parts) total += part.length;
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) { out.set(part, offset); offset += part.length; }
+    return out;
+  };
+
+  const utf8 = (text) => new TextEncoder().encode(text);
+
+  const u8 = (value) => Uint8Array.of(value & 0xff);
+  const u32le = (value) => {
+    const bytes = new Uint8Array(4);
+    new DataView(bytes.buffer).setUint32(0, value >>> 0, true);
+    return bytes;
+  };
+  const u64le = (value) => {
+    const bytes = new Uint8Array(8);
+    new DataView(bytes.buffer).setBigUint64(0, BigInt(value), true);
+    return bytes;
+  };
+
+  // Bitcoin CompactSize (used by CDataStream, not to be confused with SQLite varints).
+  const compactSize = (length) => {
+    if (length < 0) throw new Error("compactSize: negative length");
+    if (length < 253) return u8(length);
+    if (length <= 0xffff) return concat(u8(253), u16le(length));
+    if (length <= 0xffffffff) return concat(u8(254), u32le(length));
+    return concat(u8(255), u64le(length));
+  };
+  const u16le = (value) => Uint8Array.of(value & 0xff, (value >>> 8) & 0xff);
+
+  const streamString = (text) => {
+    const bytes = utf8(text);
+    return concat(compactSize(bytes.length), bytes);
+  };
+
+  const reverseHex = (hexText) => hex(hexText).reverse();
+
+  // Descriptor bodies end in "/*)" for every descriptor this app produces, so
+  // a digit+h before a path separator or bracket is always a hardened step.
+  const toCompatForm = (body) => body.replace(/(\d)h(?=[/\]])/g, "$1'");
+
+  const stripChecksum = (descriptor) => {
+    const hash = descriptor.lastIndexOf("#");
+    return hash >= 0 ? descriptor.slice(0, hash) : descriptor;
+  };
+
+  const EXTENDED_KEY_PATTERN = /((?:xpub|tpub|ypub|upub|zpub|vpub|npub|xprv|tprv|yprv|uprv|zprv|vprv|nprv)[1-9A-HJ-NP-Za-km-z]{90,})/;
+  const extractExtendedKey = (descriptor, label) => {
+    const match = descriptor.match(EXTENDED_KEY_PATTERN);
+    if (!match) throw new Error(`wallet.dat export: no extended key found in ${label} descriptor`);
+    return match[1];
+  };
+
+  // One descriptor export unit per account branch: the watch-only descriptor
+  // plus, when requested and available, its private key record material.
+  const walletDescriptorUnits = (wallet, includePrivate) => {
+    if (!wallet || wallet.kind !== "hd" || !Array.isArray(wallet.accounts)) return [];
+    const units = [];
+    for (const account of wallet.accounts) {
+      if (!account?.receiveDescriptor || !account?.changeDescriptor) continue;
+      const type = OUTPUT_TYPES[account.def?.id];
+      if (type === undefined) continue;
+      for (const branch of [0, 1]) {
+        const descriptor = branch === 0 ? account.receiveDescriptor : account.changeDescriptor;
+        const privateDescriptor = branch === 0 ? account.receiveDescriptorPriv : account.changeDescriptorPriv;
+        units.push({
+          type,
+          internal: branch === 1,
+          descriptor,
+          privateDescriptor: includePrivate ? privateDescriptor : null,
+        });
+      }
+    }
+    return units;
+  };
+
+  const hasDescriptors = (wallet) => walletDescriptorUnits(wallet, false).length > 0;
+
+  // Builds the exact key/value rows of the `main` table.
+  // deps = { sha256, checksum, base58Decode, deriveBranchBody, publicKeyForPrivate }
+  const buildWalletRecords = (wallet, includePrivate, deps, creationTime) => {
+    const network = NETWORKS[wallet?.network];
+    if (!network) throw new Error(`wallet.dat export: unknown network ${wallet?.network}`);
+    const units = walletDescriptorUnits(wallet, includePrivate);
+    if (!units.length) throw new Error("wallet.dat export: no descriptors to export");
+
+    const records = [];
+    const push = (key, value) => records.push([key, value]);
+
+    push(streamString("version"), u32le(RECORD_VERSION));
+    push(streamString("minversion"), u32le(RECORD_MINVERSION));
+    // The wallet is only signing-capable if at least one descriptor got a
+    // private key record; otherwise keep the disable-private-keys flag.
+    const hasPrivateKeys = includePrivate && units.some((unit) => unit.privateDescriptor);
+    const flags = FLAG_DESCRIPTORS | FLAG_BLANK_WALLET | (hasPrivateKeys ? 0n : FLAG_DISABLE_PRIVATE_KEYS);
+    push(streamString("flags"), u64le(flags));
+    // Fresh wallets sit on the genesis block: an empty locator for bestblock,
+    // and a one-hash locator for bestblock_nomerkle.
+    push(streamString("bestblock"), concat(u32le(DUMMY_LOCATOR_VERSION), compactSize(0)));
+    push(streamString("bestblock_nomerkle"), concat(u32le(DUMMY_LOCATOR_VERSION), compactSize(1), reverseHex(network.genesis)));
+
+    const seenActive = new Set();
+    for (const unit of units) {
+      const stored = unit.descriptor; // public (watch-only) form with checksum, exactly as Core stores it
+      const body = stripChecksum(stored);
+      const compatBody = toCompatForm(body);
+      const compatDescriptor = `${compatBody}#${deps.checksum(compatBody)}`;
+      const id = deps.sha256(utf8(compatDescriptor)); // DescriptorID: raw SHA-256 digest bytes
+      if (id.length !== 32) throw new Error("wallet.dat export: sha256 must return 32 bytes");
+
+      push(
+        concat(streamString("walletdescriptor"), id),
+        concat(streamString(stored), u64le(creationTime), u32le(0), u32le(0), u32le(RANGE_END)),
+      );
+
+      const xpub = extractExtendedKey(stored, "watch-only");
+      const branchBody = deps.deriveBranchBody(xpub, unit.internal ? 1 : 0);
+      if (branchBody.length !== 74) throw new Error("wallet.dat export: branch xpub body must be 74 bytes");
+      push(
+        concat(streamString("walletdescriptorcache"), id, u32le(0)),
+        concat(compactSize(branchBody.length), branchBody),
+      );
+
+      if (unit.privateDescriptor) {
+        const xprv = extractExtendedKey(unit.privateDescriptor, "spending");
+        const raw = deps.base58Decode(xprv);
+        if (raw.length !== 78 || raw[45] !== 0) throw new Error("wallet.dat export: unexpected extended private key payload");
+        const secret = raw.slice(46, 78);
+        const pubkey = deps.publicKeyForPrivate(secret);
+        if (pubkey.length !== 33) throw new Error("wallet.dat export: public key must be 33 bytes");
+        const der = concat(DER_PREFIX, secret, DER_PARAMS, DER_PUBKEY_PREFIX, pubkey);
+        if (der.length !== 214) throw new Error("wallet.dat export: DER private key must be 214 bytes");
+        const keyHash = deps.sha256(deps.sha256(concat(pubkey, der)));
+        push(
+          concat(streamString("walletdescriptorkey"), id, compactSize(pubkey.length), pubkey),
+          concat(compactSize(der.length), der, keyHash),
+        );
+      }
+
+      const activeKey = `${unit.internal}:${unit.type}`;
+      if (seenActive.has(activeKey)) throw new Error("wallet.dat export: duplicate script type across accounts");
+      seenActive.add(activeKey);
+      push(
+        concat(streamString(unit.internal ? "activeinternalspk" : "activeexternalspk"), u8(unit.type)),
+        id,
+      );
+    }
+    return records;
+  };
+
+  // The complete wallet.dat file bytes.
+  const buildWalletDat = (wallet, includePrivate, deps, creationTime = Math.floor(Date.now() / 1000)) => {
+    const records = buildWalletRecords(wallet, includePrivate, deps, creationTime);
+    const network = NETWORKS[wallet.network];
+    return hodlSqliteWriter.createDatabase({
+      applicationId: network.applicationId,
+      tables: [{ name: "main", sql: MAIN_SQL, primaryKey: 0, rows: records }],
+    });
+  };
+
+  const walletDatFilename = (includePrivate = false) =>
+    includePrivate ? "private-wallet-secrets.dat" : "watch-only-wallet.dat";
+
+  const walletDatButtonLabel = (includePrivate = false) =>
+    includePrivate ? "Download wallet.dat with secrets (xprvs)" : "Download watch-only wallet.dat";
+
+  return {
+    walletDescriptorUnits,
+    hasDescriptors,
+    buildWalletRecords,
+    buildWalletDat,
+    walletDatFilename,
+    walletDatButtonLabel,
+  };
+})();
 </script>
 <script>
 (() => {

@@ -574,6 +574,18 @@
     assert(text.includes(versionHeader) && text.includes("Network: testnet"), "Export headers are missing");
     assert(text.includes("PRIVATE RECOVERY MATERIAL OMITTED"), "Omission notice is missing");
     assert(!text.includes("YOUR SEED PHRASE") && !text.includes("MASTER SEED HEX") && !text.includes("BIP32 ROOT TPRV"), "Watch-only export leaked private data");
+
+    const datButton = await until(() => document.getElementById("download-wallet-dat"), "watch-only wallet.dat button");
+    assert(/watch-only/i.test(datButton.textContent), "wallet.dat button should offer the watch-only wallet while secrets are hidden");
+    state.lastBlob = null;
+    state.downloadName = "";
+    datButton.click();
+    const dat = await (await until(() => state.lastBlob, "watch-only wallet.dat")).text();
+    assert(state.downloadName === "watch-only-wallet.dat", "Unexpected wallet.dat filename");
+    assert(dat.startsWith("SQLite format 3"), "wallet.dat is not a SQLite database");
+    assert(dat.includes("walletdescriptor") && dat.includes("wpkh([") && dat.includes("tr(["), "wallet.dat is missing descriptor records");
+    assert(dat.includes("activeexternalspk") && dat.includes("activeinternalspk"), "wallet.dat is missing active script records");
+    assert(!dat.includes("walletdescriptorkey"), "Watch-only wallet.dat leaked private key records");
   });
 
   await test("private export contains complete recovery material", async () => {
@@ -587,6 +599,16 @@
     assert(text.includes("YOUR SEED PHRASE") && text.includes(vectors[0].mnemonic), "Mnemonic is missing");
     assert(text.includes("BIP39 ENTROPY HEX\n" + vectors[0].entropy), "Entropy is missing");
     assert(text.includes("MASTER SEED HEX") && text.includes("BIP32 ROOT TPRV"), "Private derivation data is missing");
+
+    const datButton = await until(() => document.getElementById("download-wallet-dat"), "private wallet.dat button");
+    assert(/secrets/i.test(datButton.textContent) && /xprv/i.test(datButton.textContent), "wallet.dat button should warn that secrets are included while revealed");
+    state.lastBlob = null;
+    state.downloadName = "";
+    datButton.click();
+    const dat = await (await until(() => state.lastBlob, "private wallet.dat")).text();
+    assert(state.downloadName === "private-wallet-secrets.dat", "Unexpected private wallet.dat filename");
+    assert(dat.startsWith("SQLite format 3"), "private wallet.dat is not a SQLite database");
+    assert(dat.includes("walletdescriptorkey"), "Private wallet.dat is missing spending key records");
   });
 
   await test("versioned HTML export downloads the current self-contained release", async () => {

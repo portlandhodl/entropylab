@@ -465,10 +465,15 @@ function hodlPrivateDataControls(descriptionId,scope="wallet"){
       <span>Show private recovery material <span class="reveal-private-toggle-note">(air-gap only)</span></span>
     </label>
     <button class="btn secondary save-recovery-sheet" id="save" type="button" aria-describedby="recovery-sheet-disclosure">${downloadLabel}</button>
+    ${hodlWalletDatControl(privateSheet)}
     <p class="recovery-download-disclosure" id="recovery-sheet-disclosure"><strong>${privateSheet?"Private export:":"Watch-only export:"}</strong> ${disclosure}</p>
   </div>`
 }
-function hodlSaveRecoveryControl(){return`<div class="wallet-data-actions no-print"><button class="btn secondary save-recovery-sheet" id="save" type="button">Save watch-only sheet</button></div>`}
+function hodlWalletDatControl(includePrivate){
+  if(!hodlWalletExport.hasDescriptors(re))return"";
+  return`<button class="btn secondary save-wallet-dat" id="download-wallet-dat" type="button" aria-describedby="recovery-sheet-disclosure">${hodlWalletExport.walletDatButtonLabel(includePrivate)}</button>`
+}
+function hodlSaveRecoveryControl(){return`<div class="wallet-data-actions no-print"><button class="btn secondary save-recovery-sheet" id="save" type="button">Save watch-only sheet</button>${hodlWalletDatControl(!1)}</div>`}
 function hodlWalletMessages(wallet,idPrefix){
   let warnings=[...(wallet.warnings||[])].filter(message=>!wallet.passphraseUsed||!/\bpassphrase\b/i.test(message)),notes=[...(wallet.notes||[])];
   if(wallet.passphraseUsed)warnings.unshift("A BIP39 passphrase is in use. It creates a different wallet, is not printed in the recovery sheet, and must be preserved separately to recover this wallet.");
@@ -574,11 +579,32 @@ function hodlDownloadRecoverySheet(){
   link.href=url;link.download="bitcoin-recovery-sheet.txt";link.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
+function hodlWalletDatDeps(){
+  return{
+    sha256:bytes=>tr(bytes),
+    checksum:Cs,
+    base58Decode:text=>sr.decode(text),
+    deriveBranchBody:(xpubText,branch)=>{
+      let node=Gt.fromExtendedKey(le(xpubText,cr.mainnet.x.pub)).deriveChild(branch),body=new Uint8Array(74),view=new DataView(body.buffer);
+      body[0]=node.depth;view.setUint32(1,node.parentFingerprint>>>0,!1);view.setUint32(5,node.index>>>0,!1);
+      body.set(node.chainCode,9);body.set(node.publicKey,41);return body
+    },
+    publicKeyForPrivate:secret=>xe.getPublicKey(secret,!0)
+  }
+}
+function hodlDownloadWalletDat(){
+  if(!re||!hodlWalletExport.hasDescriptors(re))return;
+  let bytes=hodlWalletExport.buildWalletDat(re,Ge,hodlWalletDatDeps()),blob=new Blob([bytes],{type:"application/octet-stream"}),url=URL.createObjectURL(blob),link=document.createElement("a");
+  link.href=url;link.download=hodlWalletExport.walletDatFilename(Ge);link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000)
+}
 function hodlBindWalletResultActions(){
   let reveal=document.getElementById("reveal");
   if(reveal)reveal.onchange=()=>{Ge=reveal.checked;tc();requestAnimationFrame(()=>document.getElementById("reveal")?.focus({preventScroll:true}))};
   let save=document.getElementById("save");
   if(save){let clean=save.cloneNode(!0);save.replaceWith(clean);clean.addEventListener("click",hodlDownloadRecoverySheet)}
+  let walletDat=document.getElementById("download-wallet-dat");
+  if(walletDat){let clean=walletDat.cloneNode(!0);walletDat.replaceWith(clean);clean.addEventListener("click",hodlDownloadWalletDat)}
 }
 function hodlFocusWalletResult(){
   requestAnimationFrame(()=>dr.querySelector(".wallet-data-intro h2, .account-result-card > h2")?.focus({preventScroll:!1}))

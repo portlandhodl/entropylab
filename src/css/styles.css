@@ -385,14 +385,14 @@ header { padding: 8px 0 16px; }
 .download-controls .theme-toggle { margin-left: auto; align-self: end; }
 .theme-toggle svg { display: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .theme-toggle[data-theme-mode="dark"] .theme-icon-dark, .theme-toggle[data-theme-mode="light"] .theme-icon-light, .theme-toggle[data-theme-mode="system"] .theme-icon-system { display: block; }
-.btn:is(.download-html, .save-recovery-sheet) {
+.btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat) {
   border-color: color-mix(in oklab, var(--ok) 65%, var(--border));
   background: color-mix(in oklab, var(--ok) 14%, var(--surface)); color: var(--ok);
 }
-.btn:is(.download-html, .save-recovery-sheet):hover {
+.btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat):hover {
   background: color-mix(in oklab, var(--ok) 23%, var(--surface)); color: var(--fg);
 }
-.btn:is(.download-html, .save-recovery-sheet):focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+.btn:is(.download-html, .save-recovery-sheet, .save-wallet-dat):focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
 .download-controls .github-repo-link { display: inline-flex; align-items: center; gap: 8px; }
 .github-mark { flex: 0 0 auto; }
 .download-controls .github-repo-link {

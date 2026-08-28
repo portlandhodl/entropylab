@@ -27,6 +27,13 @@ Official website: [entropylab.online](https://entropylab.online)
   for repeated ECDSA nonces from the same public key, and can compare supported
   SegWit v0 SIGHASH_ALL signatures with RFC 6979, including Bitcoin Core-style low-r grinding, in a temporary session.
 - Produces recovery information that can be saved or printed for offline use.
+- Exports a Bitcoin Core `wallet.dat` (SQLite descriptor wallet) with every
+  derived output descriptor already imported — receive and change for each
+  script type, active and ready for address generation. The default download
+  is watch-only; while private recovery material is shown on screen, the
+  export becomes the spending variant (account xprvs as descriptor keys) and
+  the button says so. Generated database files match Bitcoin Core's own
+  record layout byte-for-byte (verified against Bitcoin Core v28.3.0).
 
 ## Usage
 
@@ -89,14 +96,19 @@ files, run `npm run clean`.
 │   ├── browser-suite.html            In-page browser test suite
 │   ├── browser.test.mjs              Headless-Firefox integration harness
 │   ├── network-check.test.mjs        Tests for the network-check module
+│   ├── sqlite-writer.test.mjs        Tests for the SQLite writer (verified with real SQLite)
 │   ├── ui-defaults.test.mjs          UI defaults and markup invariants
-│   └── validate.test.mjs             Source and security invariants
+│   ├── validate.test.mjs             Source and security invariants
+│   ├── wallet-export-reference.mjs   Bitcoin Core wallet.dat ground-truth fixture
+│   └── wallet-export.test.mjs        Tests for the wallet.dat export module
 ├── src/
 │   ├── index.html          HTML template (markup and document head)
 │   ├── css/styles.css      Application styles
 │   └── js/
 │       ├── vendor.js       Bundled third-party crypto (noble, scure, bip39)
 │       ├── app.js          Application logic
+│       ├── sqlite-writer.js Minimal SQLite database file writer
+│       ├── wallet-export.js Bitcoin Core wallet.dat descriptor export
 │       ├── online.js       Hosted-site behavior and version picker
 │       ├── network-check.js Network adapter detection and warning
 │       ├── enhanced-inputs.js
