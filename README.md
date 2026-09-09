@@ -1,4 +1,5 @@
 # EntropyLab
+## DO NOT USE WITH ACTUAL BITCOIN IN ANY WAY. ENTROPY LAB IS FOR TESTNET | SIGNET | REGTEST USE ONLY
 
 EntropyLab is a self-contained Bitcoin key and wallet calculator designed for
 offline, air-gapped use. It converts user-supplied entropy, seed phrases, and
